@@ -1,6 +1,0 @@
-LexiArbiter 發生未預期錯誤。
-時間：2026-10-11T01:47:13
-錯誤類型：NameError
-錯誤訊息：name 'Falsek' is not defined
-
-請將整個 log 資料夾（特別是 lexiarbiter.log）傳給開發者協助 debug。

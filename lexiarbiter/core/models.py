@@ -101,11 +101,11 @@ class Document:
         result = []
 
         for a in self.annotations:      
-            # TODO: 完成以下缺失的部份
-            # 請判斷既有標註是否與使用者選取的範圍 (start, end) 有重疊？
-            # 如果有重疊，請將 is_overlapping 設為 True；否則為 False。
-
-            is_overlapping = False  # <--- 請修改這行的邏輯
+            is_overlapping = False
+            new_annotation_text = self.text[start:end]
+            if(a.labels == new_annotation_text ):
+                is_overlapping = True
+                break
 
             # ==========================================================
 

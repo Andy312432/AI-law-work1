@@ -1,6 +1,5 @@
 sample_file
-logs
+logs/*.*
 *.log
 .venv
-
-*.pyc
+__pycache__
