@@ -1,0 +1,6 @@
+sample_file
+logs
+*.log
+.venv
+
+*.pyc
