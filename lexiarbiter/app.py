@@ -19,7 +19,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
     QMessageBox, QPushButton, QSplitter, QStatusBar, QToolBar, QVBoxLayout,
-    QWidget, QWidgetAction,
+    QWidget, QWidgetAction, QInputDialog,
 )
 
 from . import __app_name__, __version__
@@ -938,6 +938,21 @@ class MainWindow(QMainWindow):
                 act = QAction(_swatch_icon(lb.color), text, sub)
                 act.triggered.connect(self._make_label_handler(g.id, lb.id))
                 sub.addAction(act)
+            
+            # --- 新增：管理該群組下實體類型的子選單 ---
+            sub.addSeparator()
+            manage_sub = sub.addMenu("刪除實體類型...")
+            if not g.labels:
+                empty_act = QAction("(無)", manage_sub)
+                empty_act.setEnabled(False)
+                manage_sub.addAction(empty_act)
+            else:
+                for lb in g.labels:
+                    del_act = QAction(f"刪除「{lb.name}」", manage_sub)
+                    del_act.triggered.connect(lambda _c=False, gid=g.id, lid=lb.id, lname=lb.name: self._prompt_delete_entity_type(gid, lid, lname))
+                    manage_sub.addAction(del_act)
+            # ------------------------------------------
+            
             sub.addSeparator()
             act_clear = QAction(f"清除「{g.name}」", sub)
             act_clear.triggered.connect(self._make_clear_group_handler(g.id))
@@ -984,9 +999,128 @@ class MainWindow(QMainWindow):
         # 複製文字後，順便關閉這個小選單，讓畫面保持乾淨
         act_copy.triggered.connect(lambda: (self.editor.copy(), menu.close()))
         menu.addAction(act_copy)
+        
+        # 新增實體類型的按鈕
+        act_add_type = QAction("新增實體類型...", menu)
+        act_add_type.triggered.connect(lambda: (self._prompt_add_entity_type(), menu.close()))
+        menu.addAction(act_add_type)
 
         # 避開剛放開滑鼠的位置，往下偏 8px。Qt 會自動處理畫面邊界。
         menu.exec(global_pos + QPoint(0, 8))
+
+    def _save_current_mode_to_json(self):
+        try:
+            import json
+            from pathlib import Path
+            from .core import config as cfgmod
+            
+            # 優先推導設定檔路徑：預設為 {mode.id}.json
+            mode_path = cfgmod.annotation_modes_dir() / f"{self.mode.id}.json"
+            
+            # 若不存在，掃描 modes 目錄尋找 id 相符的檔案
+            if not mode_path.exists():
+                for p in cfgmod.annotation_modes_dir().glob("*.json"):
+                    try:
+                        with open(p, "r", encoding="utf-8") as f:
+                            temp_data = json.load(f)
+                            if temp_data.get("id") == self.mode.id:
+                                mode_path = p
+                                break
+                    except Exception:
+                        pass
+
+            groups_data = []
+            for g in self.mode.groups:
+                labels_data = []
+                for l in g.labels:
+                    labels_data.append({
+                        "id": l.id,
+                        "name": l.name,
+                        "tag": getattr(l, "tag", l.id),
+                        "color": getattr(l, "color", "#FFE082"),
+                        "shortcut": getattr(l, "shortcut", "")
+                    })
+                groups_data.append({
+                    "id": g.id,
+                    "name": g.name,
+                    "labels": labels_data
+                })
+                
+            data = {
+                "id": self.mode.id,
+                "name": getattr(self.mode, "name", self.mode.id),
+                "groups": groups_data
+            }
+            
+            with open(mode_path, "w", encoding="utf-8") as json_file:
+                json.dump(data, json_file, indent=2, ensure_ascii=False)
+                
+            log.info(f"已將實體類型變更寫回設定檔: {mode_path}")
+        except Exception as e:
+            log.error(f"寫回設定檔失敗: {e}", exc_info=True)
+            QMessageBox.warning(self, "儲存失敗", f"無法將實體類型變更儲存至設定檔中：{e}")
+
+    def _prompt_add_entity_type(self):
+        if not self.mode.groups:
+            return
+
+        # 預設將新實體加入至第一個群組
+        target_group = self.mode.groups[0]
+
+        new_type_name, ok = QInputDialog.getText(self, "新增實體類型", "請輸入新的實體類型名稱：")
+        if ok and new_type_name.strip():
+            import uuid
+            import random
+            from .core.config import LabelDef
+            
+            # 準備一組適合做為標記底色的柔和色彩(Pastel colors)
+            pastel_colors = [
+                "#FFCDD2", "#F8BBD0", "#E1BEE7", "#D1C4E9", "#C5CAE9",
+                "#BBDEFB", "#B3E5FC", "#B2EBF2", "#B2DFDB", "#C8E6C9",
+                "#DCEDC8", "#F0F4C3", "#FFF9C4", "#FFECB3", "#FFE0B2",
+                "#FFCCBC", "#D7CCC8", "#CFD8DC"
+            ]
+            
+            # 建立新的 Label 定義
+            new_label_id = "L_" + uuid.uuid4().hex[:8]
+            new_label = LabelDef(
+                id=new_label_id, 
+                name=new_type_name.strip(), 
+                tag=new_label_id,
+                color=random.choice(pastel_colors),  # 隨機挑選一個顏色
+                shortcut=""
+            )
+            target_group.labels.append(new_label)
+
+            # 將更新後的 mode 寫回 JSON 設定檔
+            self._save_current_mode_to_json()
+
+            # 刷新頂部工具列與主選單，讓新實體按鈕立即出現
+            self._populate_annotate_menu()
+            self._populate_label_buttons()
+
+    def _prompt_delete_entity_type(self, group_id: str, label_id: str, label_name: str):
+        reply = QMessageBox.question(
+            self, "確認刪除",
+            f"確定要永久刪除實體類型「{label_name}」嗎？\n（已標註此類型的資料將會遺失該標籤）",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        target_group = next((g for g in self.mode.groups if g.id == group_id), None)
+        if not target_group:
+            return
+
+        # 移除對應的 label
+        target_group.labels = [lb for lb in target_group.labels if lb.id != label_id]
+
+        # 將更新後的 mode 寫回 JSON 設定檔
+        self._save_current_mode_to_json()
+
+        # 刷新 UI
+        self._populate_annotate_menu()
+        self._populate_label_buttons()
 
     def _make_quick_label_widget(self, host_menu: QMenu) -> QWidget:
         """建立水平緊湊版的標籤按鈕區塊；每個群組一列。
