@@ -22,7 +22,8 @@
     "confirm_unsaved_on_switch": true,
     "warn_partial_groups_on_export": true,
     "auto_popup_on_selection": true,
-    "show_concept_popup": true
+    "show_concept_popup": true,
+    "auto_annotate_matches": false
   },
   "_comment": "User preferences for LexiArbiter. Editing this file does NOT affect annotation output format - that is controlled by configs/annotation_modes/*.json."
 }

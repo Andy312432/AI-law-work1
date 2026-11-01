@@ -227,6 +227,7 @@ DEFAULT_PREFERENCES: dict = {
         "warn_partial_groups_on_export": True,
         "auto_popup_on_selection": True,
         "show_concept_popup": True,  # 新增：標註時是否跳出概念選擇視窗
+        "auto_annotate_matches": True,
     },
 }
 

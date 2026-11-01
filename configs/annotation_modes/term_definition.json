@@ -14,6 +14,13 @@
           "tag": "Term",
           "color": "#FFE082",
           "shortcut": "1"
+        },
+        {
+          "id": "reason",
+          "name": "原因",
+          "tag": "Sentence",
+          "color": "#FFFFFF",
+          "shortcut": "2"
         }
       ]
     }

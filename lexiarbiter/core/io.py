@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 import docx
 from pathlib import Path
 from typing import Optional
@@ -29,6 +31,7 @@ from docx.oxml.ns import qn
 
 from .config import AnnotationMode, ExportConfig
 from .models import Annotation, Document
+from .annotations import validate_term_annotations
 
 log = logging.getLogger(__name__)
 
@@ -256,6 +259,8 @@ def save_lexa(doc: Document, path: Path | str, schema: AnnotationMode,
     使用者看到的「未儲存」狀態消失。
     """
     path = Path(path)
+    if update_doc_state and schema.id == "term_definition":
+        validate_term_annotations(doc)
     log.info("儲存 lexa：%s（標註數：%d）", path, len(doc.annotations))
     payload = {
         "format": "lexa",
@@ -270,8 +275,18 @@ def save_lexa(doc: Document, path: Path | str, schema: AnnotationMode,
         "annotations": [a.to_dict() for a in doc.sorted_annotations()],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as f:
+            temporary = Path(f.name)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     if update_doc_state:
         doc.file_path = str(path)
         doc.schema_id = schema.id
@@ -338,9 +353,10 @@ def export_txt(doc: Document, path: Path | str, schema: AnnotationMode) -> dict:
         if s >= e:
             continue
         seg_labels: dict[str, str] = {}
+        seg_concept_id = None
         for a in doc.annotations:
             if a.start <= s and e <= a.end:
-                if a.concept_id: 
+                if a.concept_id and seg_concept_id is None:
                     seg_concept_id = a.concept_id
                 for gid, lid in a.labels.items():
                     if gid in seg_labels and seg_labels[gid] != lid:

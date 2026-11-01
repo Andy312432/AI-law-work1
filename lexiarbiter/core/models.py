@@ -97,25 +97,11 @@ class Document:
     def annotations_in_range_for_group(
         self, start: int, end: int, group_id: str
     ) -> list[Annotation]:
-
-        result = []
-
-        for a in self.annotations:      
-            is_overlapping = False
-            new_annotation_text = self.text[start:end]
-            if(a.labels == new_annotation_text ):
-                is_overlapping = True
-                break
-
-            # ==========================================================
-
-            has_group = (group_id in a.labels)
-
-            if is_overlapping and has_group:
-                result.append(a)
-
-        # 把收集到的所有衝突標註回傳出去
-        return result
+        """Annotations sharing this group and any character of [start, end)."""
+        if end <= start:
+            return []
+        return [a for a in self.annotations
+                if group_id in a.labels and a.start < end and start < a.end]
          
 
     def sorted_annotations(self) -> list[Annotation]:

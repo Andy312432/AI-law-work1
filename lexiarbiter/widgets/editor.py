@@ -5,54 +5,64 @@ endings, exactly as it appears in the source JSON), because that is what gets
 serialised into ``.lexa`` / ``.txt`` output and what the user's MTL pipeline
 preprocesses later.
 
-For *display*, ``\\r\\n`` is normalised to ``\\n`` so Qt renders nicely. We
-maintain two-way maps between the two coordinate systems so annotation offsets
-always refer to the original (storage) text.
+For *display*, ``\\r\\n`` is normalised to ``\\n`` and literal ``<br>`` tags
+are hidden. Two-way maps keep annotation offsets in the original (storage) text.
 """
 
 from __future__ import annotations
 
 import logging
+import re
+from html import escape
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
-from PySide6.QtCore import Qt, QPoint, Signal
+from PySide6.QtCore import Qt, QPoint, Signal, QEvent
 from PySide6.QtGui import (
     QAction, QColor, QGuiApplication, QKeySequence, QShortcut, QTextCharFormat,
     QTextCursor, QFont, QPalette,
 )
-from PySide6.QtWidgets import QMenu, QTextEdit
+from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip
 
 from ..core.config import AnnotationMode, UserPreferences, default_ui_font
 from ..core.models import Annotation, Document
 
 
 class _OffsetMap:
-    """Bidirectional map between storage offsets (with \\r\\n) and display
-    offsets (with \\n)."""
+    """Map original Python string offsets to Qt display offsets (UTF-16)."""
 
     def __init__(self, raw: str):
-        # Walk through `raw` and build a mapping.
         self.storage_to_display: list[int] = [0] * (len(raw) + 1)
         self.display_to_storage: list[int] = []
+        # A hidden tag can sit between a selection's end and the next start.
+        self._display_end_to_storage: list[int] = [0]
+        display_chars: list[str] = []
         d = 0
         i = 0
         while i < len(raw):
-            self.storage_to_display[i] = d
-            ch = raw[i]
-            if ch == "\r" and i + 1 < len(raw) and raw[i + 1] == "\n":
-                # Skip the \r entirely in display.
-                self.storage_to_display[i + 1] = d  # \n still maps to current d
-                self.display_to_storage.append(i + 1)  # display position d -> storage \n
-                d += 1
-                i += 2
-            else:
-                self.display_to_storage.append(i)
-                d += 1
-                i += 1
+            hidden_break = re.match(r"<br\s*/?>", raw[i:i + 16], re.IGNORECASE)
+            if hidden_break:
+                length = len(hidden_break.group())
+                for offset in range(i, i + length):
+                    self.storage_to_display[offset] = d
+                i += length
+                continue
+
+            is_crlf = raw.startswith("\r\n", i)
+            storage_length = 2 if is_crlf else 1
+            ch = "\n" if is_crlf else raw[i]
+            display_length = 2 if ord(ch) > 0xFFFF else 1
+            for offset in range(i, i + storage_length):
+                self.storage_to_display[offset] = d
+            self.display_to_storage.extend([i] * display_length)
+            self._display_end_to_storage.extend([i + storage_length] * display_length)
+            display_chars.append(ch)
+            d += display_length
+            i += storage_length
         self.storage_to_display[len(raw)] = d
         self.display_to_storage.append(len(raw))
+        self.display_text = "".join(display_chars)
 
     def to_display(self, storage_offset: int) -> int:
         if storage_offset <= 0:
@@ -61,12 +71,13 @@ class _OffsetMap:
             return self.storage_to_display[-1]
         return self.storage_to_display[storage_offset]
 
-    def to_storage(self, display_offset: int) -> int:
+    def to_storage(self, display_offset: int, *, end: bool = False) -> int:
+        offsets = self._display_end_to_storage if end else self.display_to_storage
         if display_offset <= 0:
-            return 0
-        if display_offset >= len(self.display_to_storage):
-            return self.display_to_storage[-1]
-        return self.display_to_storage[display_offset]
+            return offsets[0]
+        if display_offset >= len(offsets):
+            return offsets[-1]
+        return offsets[display_offset]
 
 
 def _hex_to_qcolor(value: Optional[str], alpha: int = 110) -> Optional[QColor]:
@@ -130,6 +141,8 @@ class AnnotationEditor(QTextEdit):
         self._context_menu_builder = None
         # 追蹤是不是「正在拖左鍵」；右鍵 / 中鍵 / 鍵盤選取都不應觸發 popup。
         self._left_drag_active: bool = False
+        self._active_annotation_id: Optional[str] = None
+        self._active_concept_id: Optional[str] = None
 
         # 系統深 / 淺色主題切換時自動重繪。Qt 6.5+ 才有此 signal，
         # 舊版直接 fallback 到「重啟程式才生效」。
@@ -146,15 +159,16 @@ class AnnotationEditor(QTextEdit):
         self._doc = doc
         self._mode = mode
         self._prefs = prefs
+        self._active_annotation_id = None
+        self._active_concept_id = None
 
         font = QFont(prefs.ui.get("font_family", default_ui_font()),
                      prefs.ui.get("font_size", 14))
         self.setFont(font)
 
-        # Normalise \r\n -> \n for display.
-        display_text = doc.text.replace("\r\n", "\n")
+        # Build display text and its offset maps with the same transformations.
         self._omap = _OffsetMap(doc.text)
-        self.setPlainText(display_text)
+        self.setPlainText(self._omap.display_text)
 
         # Block-format with line spacing.
         self._apply_line_spacing(prefs.ui.get("line_spacing", 1.4))
@@ -181,13 +195,17 @@ class AnnotationEditor(QTextEdit):
         cur = self.textCursor()
         d_start = cur.selectionStart()
         d_end = cur.selectionEnd()
-        return (self._omap.to_storage(d_start), self._omap.to_storage(d_end))
+        start = self._omap.to_storage(d_start)
+        if not cur.hasSelection():
+            return (start, start)
+        return (start, self._omap.to_storage(d_end, end=True))
 
     def has_selection(self) -> bool:
         s, e = self.storage_selection()
         return e > s
 
     def _on_selection_changed(self):
+        self.refresh_highlights()
         s, e = self.storage_selection()
         self.selection_changed.emit(s, e)
 
@@ -205,6 +223,30 @@ class AnnotationEditor(QTextEdit):
             self._left_drag_active = False
             if self.has_selection():
                 self.selection_finished.emit(ev.globalPosition().toPoint())
+                return
+            if self._doc is not None and self._omap is not None:
+                cursor = self.cursorForPosition(ev.position().toPoint())
+                annotations = self._doc.annotations_at(self._omap.to_storage(cursor.position()))
+                if annotations:
+                    self.annotation_clicked.emit(annotations[-1].id)
+
+    def set_active_annotation(self, annotation_id: Optional[str]):
+        self._active_annotation_id = annotation_id
+        self._active_concept_id = None
+        self.refresh_highlights()
+
+    def highlight_concept(self, concept_id: str):
+        self._active_concept_id = concept_id
+        self.refresh_highlights()
+
+    def _range_highlight(self, start: int, end: int, color: str):
+        selection = QTextEdit.ExtraSelection()
+        selection.cursor = QTextCursor(self.document())
+        selection.cursor.setPosition(self._omap.to_display(start))
+        selection.cursor.setPosition(self._omap.to_display(end), QTextCursor.KeepAnchor)
+        selection.format.setBackground(QColor(color))
+        selection.format.setForeground(QColor("#102027"))
+        return selection
 
     # ------------------------------------------------------ highlight render
 
@@ -226,11 +268,48 @@ class AnnotationEditor(QTextEdit):
                 self._apply_format_for_labels(fmt, ann)
                 sel.format = fmt
                 selections.append(sel)
+            active = self._doc.find_annotation(self._active_annotation_id)
+            if active and active.explanation_start is not None and active.explanation_end is not None:
+                selections.append(self._range_highlight(active.explanation_start, active.explanation_end, "#90CAF9"))
+                selections.append(self._range_highlight(active.start, active.end, "#FFE082"))
+            for ann in self._doc.annotations:
+                if self._active_concept_id and ann.concept_id == self._active_concept_id:
+                    selections.append(self._range_highlight(ann.start, ann.end, "#A5D6A7"))
+            selections.extend(self._matching_text_selections())
             self.setExtraSelections(selections)
         except Exception:
             # 高亮渲染失敗時清空顯示，避免整個 UI 崩潰
             log.error("refresh_highlights 發生例外，已清空高亮", exc_info=True)
             self.setExtraSelections([])
+
+    def _matching_text_selections(self) -> list[QTextEdit.ExtraSelection]:
+        """暫時反白全文相同文字，不建立或修改正式標註。"""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return []
+
+        selected_word = cursor.selectedText().replace("\u2029", "\n")
+        text = self.toPlainText()
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("#FFF59D"))
+        fmt.setForeground(QColor("#1B1B1B"))
+
+        selections = []
+        previous_start = 0
+        display_start = 0
+        # Lookahead includes overlapping matches; escape treats the text literally.
+        for match in re.finditer(f"(?={re.escape(selected_word)})", text):
+            # Qt cursor positions count UTF-16 units, including emoji pairs.
+            display_start += len(text[previous_start:match.start()].encode("utf-16-le")) // 2
+            previous_start = match.start()
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(self.document())
+            sel.cursor.setPosition(display_start)
+            sel.cursor.setPosition(display_start + cursor.selectionEnd() - cursor.selectionStart(),
+                                   QTextCursor.KeepAnchor)
+            sel.format = fmt
+            selections.append(sel)
+        return selections
 
     def _apply_format_for_labels(self, fmt: QTextCharFormat, ann: Annotation):
         """First group with a non-null color drives the background.
@@ -293,11 +372,33 @@ class AnnotationEditor(QTextEdit):
 
     # ----------------------------------------------------------- context menu
 
+    def annotation_tooltip(self, ann: Annotation) -> str:
+        term = self._doc.text[ann.start:ann.end]
+        concept = self._doc.concepts.get(ann.concept_id, "尚未設定")
+        broader = self._doc.concepts.get(ann.broader_concept_id, "尚未設定")
+        explanation = "尚未設定"
+        if ann.explanation_start is not None and ann.explanation_end is not None:
+            explanation = self._doc.text[ann.explanation_start:ann.explanation_end]
+        return (f"<b>術語：</b>{escape(term)}<br><b>概念：</b>{escape(concept)}"
+                f"<br><b>上位概念：</b>{escape(broader)}<br><b>解釋：</b>{escape(explanation[:400])}")
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.ToolTip and self._doc is not None and self._omap is not None:
+            cursor = self.cursorForPosition(event.pos())
+            annotations = self._doc.annotations_at(self._omap.to_storage(cursor.position()))
+            if annotations:
+                QToolTip.showText(event.globalPos(), self.annotation_tooltip(annotations[-1]), self)
+                return True
+            QToolTip.hideText()
+        return super().viewportEvent(event)
+
     def _on_context_menu(self, pos: QPoint):
         if self._context_menu_builder is None:
             return
         menu = QMenu(self)
         cursor = self.cursorForPosition(pos)
+        if not self.textCursor().hasSelection():
+            self.setTextCursor(cursor)
         d_pos = cursor.position()
         if self._omap is None:
             return
