@@ -26,6 +26,33 @@ class AnnotationResult:
     skipped: int = 0
 
 
+@dataclass(frozen=True)
+class ConceptDeletionImpact:
+    removed_annotations: int
+    reparented_annotations: int
+
+
+def concept_deletion_impact(doc: Document, concept_id: str) -> ConceptDeletionImpact:
+    if concept_id not in doc.concepts:
+        raise ValueError("此概念已不存在。")
+    removed = sum(a.concept_id == concept_id for a in doc.annotations)
+    reparented = sum(a.broader_concept_id == concept_id and a.concept_id != concept_id
+                     for a in doc.annotations)
+    return ConceptDeletionImpact(removed, reparented)
+
+
+def remove_concept(doc: Document, concept_id: str) -> ConceptDeletionImpact:
+    """Remove direct occurrences and promote surviving children to roots."""
+    impact = concept_deletion_impact(doc, concept_id)
+    doc.annotations = [a for a in doc.annotations if a.concept_id != concept_id]
+    for ann in doc.annotations:
+        if ann.broader_concept_id == concept_id:
+            ann.broader_concept_id = ann.concept_id
+    del doc.concepts[concept_id]
+    doc.dirty = True
+    return impact
+
+
 def _concept_id(doc: Document, name: str) -> str:
     for cid, existing in doc.concepts.items():
         if existing == name:

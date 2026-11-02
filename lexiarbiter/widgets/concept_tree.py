@@ -65,10 +65,13 @@ class ConceptSidebar(QWidget):
     concept_clicked = Signal(str)
     annotation_clicked = Signal(str)
     edit_annotation_requested = Signal(str)
+    delete_concept_requested = Signal(str)
+    viewer_created = Signal(object)
 
     def __init__(self, parent=None, *, allow_zoom=True):
         super().__init__(parent)
         self._doc = None
+        self._mode = None
         self._annotation_items = defaultdict(list)
         self._search_expansion = None
         self._viewer_dialog = None
@@ -120,10 +123,7 @@ class ConceptSidebar(QWidget):
         self._edit_shortcut = QShortcut(QKeySequence("F2"), self.tree)
         self._edit_shortcut.activated.connect(lambda: self._edit_item(self.tree.currentItem()))
 
-        self.hint = QLabel("點概念：查看相關術語　點術語：跳回原文\n雙擊術語或按 F2：修改這一筆的概念／上位概念")
-        self.hint.setWordWrap(True)
-        layout.addWidget(self.hint)
-        self.empty_label = QLabel("尚無概念。選取原文並標註術語後，關係會出現在這裡。")
+        self.empty_label = QLabel("尚無概念")
         self.empty_label.setWordWrap(True)
         layout.addWidget(self.empty_label)
         self.refresh(None)
@@ -136,7 +136,9 @@ class ConceptSidebar(QWidget):
         for item in _walk(self.tree.invisibleRootItem()):
             item.setExpanded(item.data(0, _PATH_ROLE) in paths)
 
-    def refresh(self, doc: Document | None):
+    def refresh(self, doc: Document | None, mode=None):
+        if mode is not None:
+            self._mode = mode
         same_document = doc is not None and doc is self._doc
         expanded = self._search_expansion if self._search_expansion is not None else self._expanded_paths()
         current = self.tree.currentItem()
@@ -175,7 +177,7 @@ class ConceptSidebar(QWidget):
         self.summary.setText(f"概念關係樹　{len(graph.names)} 個概念 · {count} 筆標註")
         self.empty_label.setVisible(not graph.names and not graph.unassigned)
         if self._viewer_panel is not None:
-            self._viewer_panel.refresh(doc)
+            self._viewer_panel.refresh(doc, self._mode)
 
     def _append_concept(self, graph, cid, parent_id, path, parent_item, seen):
         cycle = cid in path
@@ -186,9 +188,9 @@ class ConceptSidebar(QWidget):
         item.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
         item.setData(0, Qt.UserRole, {"kind": "concept", "id": cid, "parent_id": parent_id})
         item.setData(0, _PATH_ROLE, json.dumps(node_path))
-        description = f"概念：{graph.names[cid]}\n點選可查看相關術語。"
+        description = f"概念：{graph.names[cid]}"
         if cycle:
-            description += "\n此處回到已出現的概念，停止展開以顯示循環關係。"
+            description += "\n循環關係"
         item.setToolTip(0, description)
         seen.add(cid)
         if not cycle:
@@ -200,7 +202,13 @@ class ConceptSidebar(QWidget):
     def _append_annotation(self, parent, ann, path):
         term = self._doc.text[ann.start:ann.end].replace("\n", " ").replace("\r", " ")
         preview = term[:32] + ("…" if len(term) > 32 else "")
-        item = QTreeWidgetItem(parent, [f"「{preview}」 [{ann.start}, {ann.end})", "術語實體"])
+        type_names = []
+        if self._mode:
+            for group_id, label_id in ann.labels.items():
+                label = self._mode.label(group_id, label_id)
+                type_names.append(label.name if label else label_id)
+        type_name = "、".join(type_names) if type_names else "術語實體"
+        item = QTreeWidgetItem(parent, [f"「{preview}」 [{ann.start}, {ann.end})", type_name])
         item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
         item.setData(0, Qt.UserRole, {"kind": "annotation", "id": ann.id})
         item.setData(0, _PATH_ROLE, json.dumps((*path, "annotation", ann.id)))
@@ -210,7 +218,7 @@ class ConceptSidebar(QWidget):
         item.setToolTip(0, f"<b>術語：</b>{escape(term)}<br>"
                           f"<b>概念：</b>{escape(self._doc.concepts.get(ann.concept_id, '尚未設定'))}<br>"
                           f"<b>上位概念：</b>{escape(self._doc.concepts.get(ann.broader_concept_id, '尚未設定'))}<br>"
-                          f"<b>解釋：</b>{escape(explanation[:500])}<br>雙擊可修改這一筆。")
+                          f"<b>解釋：</b>{escape(explanation[:500])}")
         self._annotation_items[ann.id].append(item)
 
     def _filter(self, query):
@@ -263,8 +271,10 @@ class ConceptSidebar(QWidget):
             self._viewer_panel.concept_clicked.connect(self.concept_clicked)
             self._viewer_panel.annotation_clicked.connect(self.annotation_clicked)
             self._viewer_panel.edit_annotation_requested.connect(self.edit_annotation_requested)
+            self._viewer_panel.delete_concept_requested.connect(self.delete_concept_requested)
             layout.addWidget(self._viewer_panel)
-        self._viewer_panel.refresh(self._doc)
+            self.viewer_created.emit(self._viewer_dialog)
+        self._viewer_panel.refresh(self._doc, self._mode)
         self._viewer_dialog.show()
         self._viewer_dialog.raise_()
         self._viewer_dialog.activateWindow()
@@ -285,16 +295,27 @@ class ConceptSidebar(QWidget):
         if entry["kind"] == "annotation":
             self.edit_annotation_requested.emit(entry["id"])
 
+    def _menu_for_item(self, item):
+        menu = QMenu(self)
+        entry = item.data(0, Qt.UserRole)
+        if entry["kind"] == "concept":
+            cid = entry["id"]
+            action = menu.addAction("刪除概念…", lambda: self.delete_concept_requested.emit(cid))
+            action.setData("delete_concept")
+            action.setEnabled(self._doc is not None and cid in self._doc.concepts)
+            menu.addSeparator()
+        if entry["kind"] == "annotation":
+            menu.addAction("跳回原文", lambda: self._activate_item(item))
+            menu.addAction("修改這筆標註…", lambda: self._edit_item(item))
+            menu.addSeparator()
+        menu.addAction("展開這一層", lambda: item.setExpanded(True))
+        menu.addAction("收合這一層", lambda: item.setExpanded(False))
+        return menu
+
     def _context_menu(self, position):
         item = self.tree.itemAt(position)
         if item is None:
             return
-        menu = QMenu(self)
-        entry = item.data(0, Qt.UserRole)
-        if entry["kind"] == "annotation":
-            menu.addAction("跳回原文", lambda: self._activate_item(item))
-            menu.addAction("修改這一筆的概念／上位概念…", lambda: self._edit_item(item))
-            menu.addSeparator()
-        menu.addAction("展開這一層", lambda: item.setExpanded(True))
-        menu.addAction("收合這一層", lambda: item.setExpanded(False))
+        self.tree.setCurrentItem(item)
+        menu = self._menu_for_item(item)
         menu.exec(self.tree.viewport().mapToGlobal(position))

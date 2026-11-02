@@ -53,6 +53,7 @@ class WindowTests(unittest.TestCase):
             self.select_span(expected.start, expected.end)
             with patch("lexiarbiter.app.ConceptSelectionDialog") as dialog:
                 dialog.return_value.exec.return_value = True
+                dialog.return_value.selected_entity_type.return_value = "term"
                 dialog.return_value.concept_name.return_value = reference.concepts[expected.concept_id]
                 dialog.return_value.broader_name.return_value = reference.concepts[expected.broader_concept_id]
                 self.window.apply_label("entity", "term")
@@ -82,6 +83,7 @@ class WindowTests(unittest.TestCase):
         self.select_span(55, 59)
         with patch("lexiarbiter.app.ConceptSelectionDialog") as dialog:
             dialog.return_value.exec.return_value = True
+            dialog.return_value.selected_entity_type.return_value = "term"
             dialog.return_value.concept_name.return_value = "意定之債"
             dialog.return_value.broader_name.return_value = "債之發生原因"
             self.window.apply_label("entity", "term")
@@ -149,6 +151,42 @@ class WindowTests(unittest.TestCase):
         self.window.concept_panel.concept_clicked.emit(ann.concept_id)
         self.assertEqual(self.window.active_annotation_id, ann.id)
         self.assertIn("未找到概念", self.window.status.currentMessage())
+
+    def test_edit_entity_type_updates_details_tree_history_and_saved_file(self):
+        self.window.load_file(str(FIXTURES / "test_example.lexa"))
+        ann = self.window.doc.annotations[0]
+        annotation_id = ann.id
+        original = (ann.start, ann.end, ann.explanation_start, ann.explanation_end,
+                    ann.concept_id, ann.broader_concept_id)
+        self.window._select_annotation(annotation_id)
+        self.assertIn("實體類型：專業術語", self.window.annotation_details.summary.toPlainText())
+
+        def change_type():
+            dialog = APP.activeModalWidget()
+            dialog.entity_type_combo.setCurrentIndex(dialog.entity_type_combo.findData("reason"))
+            QTest.mouseClick(dialog.btn_ok, Qt.LeftButton)
+
+        QTimer.singleShot(0, change_type)
+        self.window.action_edit_concepts()
+        current = self.window.doc.find_annotation(annotation_id)
+        self.assertEqual(current.labels["entity"], "reason")
+        self.assertEqual((current.start, current.end, current.explanation_start, current.explanation_end,
+                          current.concept_id, current.broader_concept_id), original)
+        self.assertIn("實體類型：原因", self.window.annotation_details.summary.toPlainText())
+        self.assertEqual(self.window.concept_panel.tree.currentItem().text(1), "原因")
+        self.assertTrue(all(a.labels["entity"] == "term" for a in self.window.doc.annotations
+                            if a.id != annotation_id))
+        self.window.undo_stack.undo()
+        self.assertIn("實體類型：專業術語", self.window.annotation_details.summary.toPlainText())
+        self.window.undo_stack.redo()
+        self.assertIn("實體類型：原因", self.window.annotation_details.summary.toPlainText())
+        path = Path(self.folder.name) / "changed-type.lexa"
+        with patch("lexiarbiter.app.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            self.assertTrue(self.window.action_save_as())
+        self.window.load_file(str(path))
+        self.window._select_annotation(annotation_id)
+        self.assertEqual(self.window.doc.find_annotation(annotation_id).labels["entity"], "reason")
+        self.assertIn("實體類型：原因", self.window.annotation_details.summary.toPlainText())
 
 
 if __name__ == "__main__":

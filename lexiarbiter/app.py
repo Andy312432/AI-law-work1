@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer
 from PySide6.QtGui import (
-    QAction, QActionGroup, QColor, QIcon, QPainter, QPalette, QPixmap, QKeySequence,
+    QAction, QActionGroup, QColor, QIcon, QPainter, QPalette, QPixmap, QKeySequence, QUndoStack,
 )
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
@@ -30,7 +30,10 @@ from .core.config import (
 )
 from .core.logger import current_log_dir
 from .core.models import Annotation, Document, detect_same_group_conflicts
-from .core.annotations import TextSpan, record_term, set_explanation
+from .core.annotations import (
+    TextSpan, concept_deletion_impact, record_term, remove_concept, set_explanation,
+)
+from .history import EditCommand, EditSnapshot
 from .widgets.editor import AnnotationEditor
 from .widgets.file_panel import FilePanel
 from .widgets.concept_panel import AnnotationDetails, ConceptSelectionDialog, ConceptSidebar
@@ -99,6 +102,8 @@ class MainWindow(QMainWindow):
 
         self.doc: Optional[Document] = None
         self.active_annotation_id: Optional[str] = None
+        self.undo_stack = QUndoStack(self)
+        self.undo_stack.setUndoLimit(100)
 
         # central editor + file panel
         self.editor = AnnotationEditor()
@@ -115,6 +120,8 @@ class MainWindow(QMainWindow):
         self.concept_panel.concept_clicked.connect(self._on_concept_clicked)
         self.concept_panel.annotation_clicked.connect(self._navigate_annotation)
         self.concept_panel.edit_annotation_requested.connect(self._edit_tree_annotation)
+        self.concept_panel.delete_concept_requested.connect(self.action_delete_concept)
+        self.concept_panel.viewer_created.connect(self._configure_tree_viewer)
         self.annotation_details = AnnotationDetails()
         self.annotation_details.setVisible(self.mode.id == "term_definition")
         self.annotation_details.explanation_requested.connect(self.action_set_explanation)
@@ -145,6 +152,8 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._setup_app_shortcuts()
         self._build_status_bar()
+        self.undo_stack.indexChanged.connect(self._on_history_changed)
+        self.undo_stack.cleanChanged.connect(self._on_history_changed)
 
         self._update_actions()
         self._refresh_status()
@@ -220,6 +229,13 @@ class MainWindow(QMainWindow):
 
         # Edit
         m_edit = mb.addMenu("編輯(&E)")
+        self.act_undo = self.undo_stack.createUndoAction(self, "復原")
+        self.act_undo.setShortcut(self.prefs.app_shortcut("undo", "Ctrl+Z"))
+        m_edit.addAction(self.act_undo)
+        self.act_redo = self.undo_stack.createRedoAction(self, "重做")
+        self.act_redo.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
+        m_edit.addAction(self.act_redo)
+        m_edit.addSeparator()
         self.act_remove_ann = QAction("刪除游標處標註", self)
         self.act_remove_ann.setShortcut(self.prefs.app_shortcut("remove_annotation", "Ctrl+D"))
         self.act_remove_ann.triggered.connect(self.action_remove_annotation_at_cursor)
@@ -321,15 +337,13 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         self.act_set_explanation = QAction("設定解釋", self)
         self.act_set_explanation.setShortcut(self.prefs.app_shortcut("set_explanation", "Ctrl+L"))
-        self.act_set_explanation.setToolTip("先點選術語，再選取解釋文字，按此按鈕或 Ctrl+L")
         self.act_set_explanation.triggered.connect(self.action_set_explanation)
         tb.addAction(self.act_set_explanation)
-        self.act_edit_concepts = QAction("修改概念／上位概念", self)
+        self.act_edit_concepts = QAction("修改標註", self)
         self.act_edit_concepts.triggered.connect(self.action_edit_concepts)
         self.act_auto_match = QAction("自動標註相同術語", self)
         self.act_auto_match.setCheckable(True)
         self.act_auto_match.setChecked(self.prefs.behavior.get("auto_annotate_matches", True))
-        self.act_auto_match.setToolTip("新增術語時自動標註全文相同文字；關閉可逐筆重現測試任務單")
         self.act_auto_match.toggled.connect(self._toggle_auto_match)
         tb.addAction(self.act_auto_match)
         tb.addSeparator()
@@ -457,6 +471,7 @@ class MainWindow(QMainWindow):
             self._apply_term_label(group_id, label_id)
             return
 
+        before = EditSnapshot.capture(self.doc, self.active_annotation_id)
         try:
             if not self.editor.has_selection():
                 ann_id = self.editor.annotation_at_cursor()
@@ -474,9 +489,7 @@ class MainWindow(QMainWindow):
                     return
                 ann.labels[group_id] = label_id
                 self.doc.dirty = True
-                self.editor.refresh_highlights()
-                self._refresh_status()
-                self._update_window_title()
+                self._commit_edit("套用標籤", before)
                 return
 
             s, e = self.editor.storage_selection()
@@ -500,10 +513,10 @@ class MainWindow(QMainWindow):
                 ann = Annotation(start=s, end=e, labels={group_id: label_id})
                 self.doc.add_annotation(ann)
             self.doc.dirty = True
-            self.editor.refresh_highlights()
-            self._refresh_status()
-            self._update_window_title()
+            self._commit_edit("套用標籤", before)
         except Exception:
+            self._restore_edit_snapshot(before)
+            self._on_history_changed()
             log.error("apply_label 發生例外 group=%s label=%s", group_id, label_id, exc_info=True)
             QMessageBox.critical(self, "標註錯誤", "套用標籤時發生錯誤，請查看 logs/lexiarbiter.log。")
 
@@ -528,6 +541,8 @@ class MainWindow(QMainWindow):
             "要重現提供的 11 筆任務單，請先關閉「自動標註相同術語」。\n"
             "右側「概念關係樹」呈現上位概念、概念與術語位置，可搜尋、展開及收合。\n"
             "點概念可循環跳到相關術語；點術語位置跳回原文，雙擊可修改概念與上位概念。\n"
+            "右鍵點概念可刪除；直接對應術語一併移除，下位概念保留並成為最上層。\n"
+            "Ctrl+Z 復原；Ctrl+Shift+Z 或 Ctrl+Y 重做，最多保留目前文件的 100 步操作。\n"
             "「資料夾檔案」分頁保留檔案清單；滑鼠停在術語上可查看資訊。",
         )
 
@@ -546,13 +561,15 @@ class MainWindow(QMainWindow):
         term = self.doc.text[s:e]
         concept = self.doc.concepts.get(exact.concept_id, term) if exact else term
         broader = self.doc.concepts.get(exact.broader_concept_id, "") if exact else ""
+        group = self.mode.group(group_id)
+        entity_types = [(label.id, label.name) for label in group.labels] if group else []
         dialog = ConceptSelectionDialog(self.doc.concepts, default_text=concept,
-                                        broader_name=broader, parent=self)
+                                        broader_name=broader, parent=self,
+                                        entity_types=entity_types, entity_type_id=label_id)
         if not dialog.exec():
             return
+        label_id = dialog.selected_entity_type() or label_id
         conflicts = [a for a in self.doc.annotations_in_range_for_group(s, e, group_id) if a is not exact]
-        if exact and not self._confirm_replace_existing_group_label(exact, group_id, label_id):
-            return
         if conflicts:
             answer = QMessageBox.question(
                 self, "術語範圍重疊",
@@ -563,6 +580,7 @@ class MainWindow(QMainWindow):
                 return
         if auto_match is None:
             auto_match = self.act_auto_match.isChecked() and label_id == "term"
+        before = EditSnapshot.capture(self.doc, self.active_annotation_id)
         try:
             result = record_term(
                 self.doc, TextSpan(s, e), dialog.concept_name(), dialog.broader_name(),
@@ -572,11 +590,11 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             QMessageBox.warning(self, "無法標註", str(error))
             return
-        self._select_annotation(result.annotation.id)
-        self._refresh_annotation_ui()
+        self.active_annotation_id = result.annotation.id
+        self._commit_edit(("修改標註" if exact else "新增標註")
+                          + ("（含自動標註）" if result.auto_created else ""), before)
         self.status.showMessage(
-            f"已設定「{term}」；自動新增 {result.auto_created} 筆，略過重疊 {result.skipped} 處。"
-            "新位置的解釋先用術語本身，可個別修改。", 10000,
+            f"已設定「{term}」；自動新增 {result.auto_created} 筆，略過重疊 {result.skipped} 處。", 10000,
         )
 
     def _select_annotation(self, annotation_id):
@@ -584,7 +602,7 @@ class MainWindow(QMainWindow):
             self.active_annotation_id = None
         else:
             self.active_annotation_id = annotation_id
-        self.annotation_details.refresh(self.doc, self.active_annotation_id)
+        self.annotation_details.refresh(self.doc, self.active_annotation_id, self.mode)
         self.editor.set_active_annotation(self.active_annotation_id)
         self.concept_panel.select_annotation(self.active_annotation_id)
         self._update_actions()
@@ -596,6 +614,54 @@ class MainWindow(QMainWindow):
     def _edit_tree_annotation(self, annotation_id):
         self._navigate_annotation(annotation_id)
         self.action_edit_concepts()
+
+    def _configure_tree_viewer(self, dialog):
+        dialog.addActions([self.act_undo, self.act_redo])
+
+    def _commit_edit(self, title, before):
+        if self.doc.find_annotation(self.active_annotation_id) is None:
+            self.active_annotation_id = None
+        after = EditSnapshot.capture(self.doc, self.active_annotation_id)
+        if before.same_content(after):
+            self._refresh_annotation_ui()
+            self._on_history_changed()
+            return
+        self.undo_stack.push(EditCommand(title, before, after, self._restore_edit_snapshot))
+
+    def _restore_edit_snapshot(self, snapshot):
+        if self.doc is None:
+            return
+        snapshot.restore(self.doc)
+        self.active_annotation_id = snapshot.active_annotation_id
+        cursor = self.editor.textCursor()
+        cursor.clearSelection()
+        self.editor.setTextCursor(cursor)
+        self._refresh_annotation_ui()
+
+    def _on_history_changed(self, *_):
+        if self.doc is not None:
+            self.doc.dirty = not self.undo_stack.isClean()
+            self._update_window_title()
+
+    def action_delete_concept(self, concept_id):
+        if self.doc is None or concept_id not in self.doc.concepts:
+            return
+        name = self.doc.concepts[concept_id]
+        impact = concept_deletion_impact(self.doc, concept_id)
+        answer = QMessageBox.question(
+            self, "刪除概念",
+            f"確定刪除整份文件中的概念「{name}」（含所有分支）？\n\n"
+            f"將移除直接對應的 {impact.removed_annotations} 筆術語標註。\n"
+            f"另有 {impact.reparented_annotations} 筆術語以此概念作為上位概念，"
+            "將改為最上層（上位概念填自己），保留其概念與術語。",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        before = EditSnapshot.capture(self.doc, self.active_annotation_id)
+        remove_concept(self.doc, concept_id)
+        self._commit_edit(f"刪除概念「{name}」", before)
+        self.status.showMessage(f"已刪除概念「{name}」及 {impact.removed_annotations} 筆術語標註。", 7000)
 
     def _on_concept_clicked(self, concept_id):
         if self.doc is None:
@@ -609,35 +675,38 @@ class MainWindow(QMainWindow):
         self._navigate_annotation(ids[index])
         self.editor.highlight_concept(concept_id)
         name = self.doc.concepts.get(concept_id, f"未找到概念：{concept_id}")
-        self.status.showMessage(f"概念「{name}」：第 {index + 1} / {len(ids)} 筆；再點概念節點可跳下一筆。", 6000)
+        self.status.showMessage(f"概念「{name}」：第 {index + 1} / {len(ids)} 筆。", 6000)
 
     def action_set_explanation(self):
         if self.doc is None or not self.active_annotation_id:
             self.status.showMessage("請先點選要設定解釋的術語。", 4000)
             return
         s, e = self.editor.storage_selection()
+        before = EditSnapshot.capture(self.doc, self.active_annotation_id)
         try:
             set_explanation(self.doc, self.active_annotation_id, TextSpan(s, e))
         except ValueError as error:
             self.status.showMessage(str(error), 5000)
             return
-        self._refresh_annotation_ui()
+        self._commit_edit("設定解釋", before)
         self.status.showMessage(f"已設定解釋範圍 [{s}, {e})，共 {e - s} 字。", 5000)
 
     def action_use_term_explanation(self):
         ann = self.doc.find_annotation(self.active_annotation_id) if self.doc else None
         if ann:
+            before = EditSnapshot.capture(self.doc, self.active_annotation_id)
             set_explanation(self.doc, ann.id, TextSpan(ann.start, ann.end))
-            self._refresh_annotation_ui()
+            self._commit_edit("解釋改用術語本身", before)
 
     def action_edit_concepts(self):
         ann = self.doc.find_annotation(self.active_annotation_id) if self.doc else None
         if ann and ann.labels:
-            group_id, label_id = next(iter(ann.labels.items()))
+            group_id = "entity" if "entity" in ann.labels else next(iter(ann.labels))
+            label_id = ann.labels[group_id]
             self._apply_term_label(group_id, label_id, target=ann, auto_match=False)
 
     def _refresh_annotation_ui(self):
-        self.concept_panel.refresh(self.doc)
+        self.concept_panel.refresh(self.doc, self.mode)
         self._select_annotation(self.active_annotation_id)
         self._refresh_status()
         self._update_window_title()
@@ -645,6 +714,7 @@ class MainWindow(QMainWindow):
     def clear_group_in_selection(self, group_id: str):
         if self.doc is None:
             return
+        before = EditSnapshot.capture(self.doc, self.active_annotation_id)
         s, e = self.editor.storage_selection()
         if e <= s:
             ann_id = self.editor.annotation_at_cursor()
@@ -662,24 +732,25 @@ class MainWindow(QMainWindow):
                 if not a.labels:
                     self.doc.remove_annotation(a.id)
         self.doc.dirty = True
-        self._refresh_annotation_ui()
+        self._commit_edit("清除標籤", before)
 
     def action_remove_annotation_at_cursor(self):
         if self.doc is None:
             return
+        before = EditSnapshot.capture(self.doc, self.active_annotation_id)
         # Prefer selection scope if set.
         s, e = self.editor.storage_selection()
         if e > s:
             for a in list(self.doc.annotations_in_range(s, e)):
                 self.doc.remove_annotation(a.id)
-            self._refresh_annotation_ui()
+            self._commit_edit("刪除術語標註", before)
             return
         ann_id = self.editor.annotation_at_cursor()
         if ann_id is None:
             self.status.showMessage("游標處沒有標註可刪除。", 3000)
             return
         if self.doc.remove_annotation(ann_id):
-            self._refresh_annotation_ui()
+            self._commit_edit("刪除術語標註", before)
 
     # ----------------------------------------------------------- file ops
 
@@ -814,13 +885,17 @@ class MainWindow(QMainWindow):
                 log.info("使用者於未知標籤確認時取消載入：%s", path)
                 return
 
+        loaded_dirty = doc.dirty
         self.doc = doc
+        self.undo_stack.clear()
+        if loaded_dirty:
+            self.undo_stack.resetClean()
         self.active_annotation_id = None
         self.editor.attach(doc, self.mode, self.prefs)
-        self.concept_panel.refresh(doc) # 刷新概念側欄
+        self.concept_panel.refresh(doc, self.mode)
         if self.mode.id == "term_definition":
             self.right_tabs.setCurrentWidget(self.concept_panel)
-        self.annotation_details.refresh(doc)
+        self.annotation_details.refresh(doc, mode=self.mode)
         self._update_window_title()
         # Update file panel to the directory of this doc.
         self.file_panel.set_directory(Path(path).parent, Path(path))
@@ -877,6 +952,7 @@ class MainWindow(QMainWindow):
                 log.error("儲存失敗：%s", path, exc_info=True)
                 QMessageBox.critical(self, "儲存失敗", str(e))
                 return False
+            self.undo_stack.setClean()
             self._cleanup_autosave()
             self.status.showMessage(f"已儲存：{path}", 4000)
             self.file_panel.refresh()
@@ -907,6 +983,7 @@ class MainWindow(QMainWindow):
             log.error("另存失敗：%s", path, exc_info=True)
             QMessageBox.critical(self, "儲存失敗", str(e))
             return False
+        self.undo_stack.setClean()
         self._cleanup_autosave()
         self.status.showMessage(f"已儲存：{path}", 4000)
         self.file_panel.set_directory(Path(path).parent, Path(path))
@@ -1039,6 +1116,7 @@ class MainWindow(QMainWindow):
         self._populate_label_buttons()
         if self.doc is not None:
             self.editor.attach(self.doc, self.mode, self.prefs)
+            self.concept_panel.refresh(self.doc, self.mode)
             self._select_annotation(self.active_annotation_id)
         self._refresh_status()
         self._update_window_title()
@@ -1338,7 +1416,7 @@ class MainWindow(QMainWindow):
         mode_text = f"模式：{self.mode.name}（{self.mode.id}）"
         self.status_mode_label.setText(mode_text)
         if self.doc is None:
-            self.status.showMessage("尚未開啟檔案。可從右側清單或檔案 → 開啟。", 0)
+            self.status.showMessage("尚未開啟檔案。", 0)
         else:
             n = len(self.doc.annotations)
             grp_total = sum(len(a.labels) for a in self.doc.annotations)
