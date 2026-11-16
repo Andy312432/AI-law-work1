@@ -49,15 +49,17 @@ class WindowTests(unittest.TestCase):
 
     def test_eleven_worksheet_actions_through_window_save_and_reload(self):
         reference = load_lexa(FIXTURES / "test_example.lexa")
+        anchor = "表格文字解析："
+        shift = self.window.doc.text.index(anchor) - reference.text.index(anchor)
         for expected in reference.annotations:
-            self.select_span(expected.start, expected.end)
+            self.select_span(expected.start + shift, expected.end + shift)
             with patch("lexiarbiter.app.ConceptSelectionDialog") as dialog:
                 dialog.return_value.exec.return_value = True
                 dialog.return_value.selected_entity_type.return_value = "term"
                 dialog.return_value.concept_name.return_value = reference.concepts[expected.concept_id]
                 dialog.return_value.broader_name.return_value = reference.concepts[expected.broader_concept_id]
                 self.window.apply_label("entity", "term")
-            self.select_span(expected.explanation_start, expected.explanation_end)
+            self.select_span(expected.explanation_start + shift, expected.explanation_end + shift)
             self.window.action_set_explanation()
         self.assertEqual(len(self.window.doc.annotations), 11)
         path = Path(self.folder.name) / "worksheet.lexa"
@@ -66,7 +68,12 @@ class WindowTests(unittest.TestCase):
         self.window.load_file(str(path))
         for found, expected in zip(self.window.doc.sorted_annotations(), reference.sorted_annotations()):
             self.assertEqual((found.start, found.end, found.explanation_start, found.explanation_end),
-                             (expected.start, expected.end, expected.explanation_start, expected.explanation_end))
+                             tuple(pos + shift for pos in (expected.start, expected.end,
+                                                          expected.explanation_start, expected.explanation_end)))
+            self.assertEqual(self.window.doc.text[found.start:found.end],
+                             reference.text[expected.start:expected.end])
+            self.assertEqual(self.window.doc.text[found.explanation_start:found.explanation_end],
+                             reference.text[expected.explanation_start:expected.explanation_end])
             self.assertEqual(self.window.doc.concepts[found.concept_id], reference.concepts[expected.concept_id])
             self.assertEqual(self.window.doc.concepts[found.broader_concept_id], reference.concepts[expected.broader_concept_id])
 
@@ -80,7 +87,8 @@ class WindowTests(unittest.TestCase):
 
     def test_default_automatic_action_records_all_occurrences(self):
         self.window.act_auto_match.setChecked(True)
-        self.select_span(55, 59)
+        start = self.window.doc.text.index("意定之債")
+        self.select_span(start, start + 4)
         with patch("lexiarbiter.app.ConceptSelectionDialog") as dialog:
             dialog.return_value.exec.return_value = True
             dialog.return_value.selected_entity_type.return_value = "term"
@@ -96,7 +104,8 @@ class WindowTests(unittest.TestCase):
     def test_real_dialog_keyboard_shortcut_and_explanation_button(self):
         self.window.show()
         APP.processEvents()
-        self.select_span(43, 49)
+        start = self.window.doc.text.index("債之發生原因", self.window.doc.text.index("表格文字解析："))
+        self.select_span(start, start + 6)
 
         def complete_dialog():
             dialog = APP.activeModalWidget()
@@ -107,9 +116,12 @@ class WindowTests(unittest.TestCase):
         self.window.editor.setFocus()
         QTest.keyClick(self.window.editor, Qt.Key_1)
         self.assertEqual(len(self.window.doc.annotations), 1)
-        self.select_span(50, 204)
+        explanation_start = self.window.doc.text.index("大致區分")
+        ending = "行為人行為自由」。"
+        explanation_end = self.window.doc.text.index(ending) + len(ending)
+        self.select_span(explanation_start, explanation_end)
         QTest.mouseClick(self.window.annotation_details.set_explanation_button, Qt.LeftButton)
-        self.assertEqual(self.window.doc.annotations[0].explanation_end, 204)
+        self.assertEqual(self.window.doc.annotations[0].explanation_end, explanation_end)
         self.assertIn("債之發生原因", self.window.annotation_details.summary.toPlainText())
 
     def test_tree_edit_changes_parent_refreshes_branch_and_survives_save(self):

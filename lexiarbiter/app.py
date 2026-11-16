@@ -780,8 +780,9 @@ class MainWindow(QMainWindow):
             start_dir = str(Path(self.doc.file_path).parent)
         path, _ = QFileDialog.getOpenFileName(
             self, "開啟檔案", start_dir,
-            "支援的格式 (*.json *.lexa *.txt *.docx);;判決 JSON (*.json);;"
-            "Word 檔 (*.docx);;標註進度 (*.lexa);;模型匯出 (*.txt);;所有檔案 (*.*)"
+            "支援的格式 (*.json *.lexa *.txt *.docx *.md *.markdown *.html *.htm);;判決 JSON (*.json);;"
+            "Word 檔 (*.docx);;Markdown (*.md *.markdown);;HTML (*.html *.htm);;"
+            "標註進度 (*.lexa);;模型匯出 (*.txt);;所有檔案 (*.*)"
         )
         if path:
             self.load_file(path)
@@ -1178,9 +1179,14 @@ class MainWindow(QMainWindow):
                 act = QAction(_swatch_icon(lb.color), text, sub)
                 act.triggered.connect(self._make_label_handler(g.id, lb.id))
                 sub.addAction(act)
-            
-            # --- 新增：管理該群組下實體類型的子選單 ---
+
+            # 新增實體類型的按鈕
             sub.addSeparator()
+            act_add_type = QAction("新增實體類型...", menu)
+            act_add_type.triggered.connect(lambda: (self._prompt_add_entity_type(), menu.close()))
+            menu.addAction(act_add_type)
+
+            # --- 新增：管理該群組下實體類型的子選單 ---
             manage_sub = sub.addMenu("刪除實體類型...")
             if not g.labels:
                 empty_act = QAction("(無)", manage_sub)
@@ -1193,10 +1199,10 @@ class MainWindow(QMainWindow):
                     manage_sub.addAction(del_act)
             # ------------------------------------------
             
-            sub.addSeparator()
-            act_clear = QAction(f"清除「{g.name}」", sub)
-            act_clear.triggered.connect(self._make_clear_group_handler(g.id))
-            sub.addAction(act_clear)
+            #sub.addSeparator()
+            #act_clear = QAction(f"清除「{g.name}」", sub)
+            #act_clear.triggered.connect(self._make_clear_group_handler(g.id))
+            #sub.addAction(act_clear)
 
         menu.addSeparator()
         act_remove = QAction("刪除此處標註", menu)
@@ -1243,11 +1249,6 @@ class MainWindow(QMainWindow):
 
         if self.mode.id == "term_definition" and self.active_annotation_id:
             menu.addAction(self.act_set_explanation)
-        
-        # 新增實體類型的按鈕
-        act_add_type = QAction("新增實體類型...", menu)
-        act_add_type.triggered.connect(lambda: (self._prompt_add_entity_type(), menu.close()))
-        menu.addAction(act_add_type)
 
         # 避開剛放開滑鼠的位置，往下偏 8px。Qt 會自動處理畫面邊界。
         menu.exec(global_pos + QPoint(0, 8))

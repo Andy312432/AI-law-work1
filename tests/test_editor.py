@@ -17,12 +17,12 @@ APP = QApplication.instance() or QApplication([])
 
 
 class EditorTests(unittest.TestCase):
-    def test_raw_offsets_handle_crlf_hidden_breaks_and_emoji(self):
+    def test_plain_text_offsets_handle_crlf_and_emoji_without_hiding_tags(self):
         mapping = _OffsetMap("甲\r\n😀<br />乙<br>丙")
-        self.assertEqual(mapping.display_text, "甲\n😀乙丙")
+        self.assertEqual(mapping.display_text, "甲\n😀<br />乙<br>丙")
         self.assertEqual(mapping.to_storage(mapping.to_display(10)), 10)
         self.assertEqual(mapping.to_storage(mapping.to_display(4), end=True), 4)
-        self.assertEqual(mapping.to_storage(mapping.to_display(12), end=True), 11)
+        self.assertEqual(mapping.to_storage(mapping.to_display(12), end=True), 12)
 
     def test_click_annotation_emits_id_and_highlights_its_explanation(self):
         ann = Annotation(0, 2, {"entity": "term"}, concept_id="c", broader_concept_id="c",

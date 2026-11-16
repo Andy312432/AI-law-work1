@@ -1,12 +1,8 @@
-"""The annotation editor widget.
+"""Read-only native rich content with annotation overlays.
 
-We keep the *original* text in `Document.text` (with raw ``\\r\\n`` line
-endings, exactly as it appears in the source JSON), because that is what gets
-serialised into ``.lexa`` / ``.txt`` output and what the user's MTL pipeline
-preprocesses later.
-
-For *display*, ``\\r\\n`` is normalised to ``\\n`` and literal ``<br>`` tags
-are hidden. Two-way maps keep annotation offsets in the original (storage) text.
+Document.text is the annotation coordinate basis. Rich imports retain their
+Markdown/HTML source separately in metadata; legacy/plain files keep their
+original text. Two-way maps handle CRLF and Qt UTF-16 cursor positions.
 """
 
 from __future__ import annotations
@@ -18,15 +14,16 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-from PySide6.QtCore import Qt, QPoint, Signal, QEvent
+from PySide6.QtCore import Qt, QPoint, Signal, QEvent, QSignalBlocker
 from PySide6.QtGui import (
     QAction, QColor, QGuiApplication, QKeySequence, QShortcut, QTextCharFormat,
-    QTextCursor, QFont, QPalette,
+    QTextCursor, QTextBlockFormat, QFont, QPalette,
 )
 from PySide6.QtWidgets import QMenu, QTextEdit, QToolTip
 
 from ..core.config import AnnotationMode, UserPreferences, default_ui_font
 from ..core.models import Annotation, Document
+from ..core.rich_text import display_document
 
 
 class _OffsetMap:
@@ -35,20 +32,11 @@ class _OffsetMap:
     def __init__(self, raw: str):
         self.storage_to_display: list[int] = [0] * (len(raw) + 1)
         self.display_to_storage: list[int] = []
-        # A hidden tag can sit between a selection's end and the next start.
         self._display_end_to_storage: list[int] = [0]
         display_chars: list[str] = []
         d = 0
         i = 0
         while i < len(raw):
-            hidden_break = re.match(r"<br\s*/?>", raw[i:i + 16], re.IGNORECASE)
-            if hidden_break:
-                length = len(hidden_break.group())
-                for offset in range(i, i + length):
-                    self.storage_to_display[offset] = d
-                i += length
-                continue
-
             is_crlf = raw.startswith("\r\n", i)
             storage_length = 2 if is_crlf else 1
             ch = "\n" if is_crlf else raw[i]
@@ -166,12 +154,11 @@ class AnnotationEditor(QTextEdit):
                      prefs.ui.get("font_size", 14))
         self.setFont(font)
 
-        # Build display text and its offset maps with the same transformations.
-        self._omap = _OffsetMap(doc.text)
-        self.setPlainText(self._omap.display_text)
-
-        # Block-format with line spacing.
-        self._apply_line_spacing(prefs.ui.get("line_spacing", 1.4))
+        # Suppress selections from the previous document while replacing content.
+        with QSignalBlocker(self):
+            display_document(self.document(), doc)
+            self._omap = _OffsetMap(doc.text)
+            self._apply_line_spacing(prefs.ui.get("line_spacing", 1.4))
         self.refresh_highlights()
 
     def _apply_line_spacing(self, factor: float):
@@ -179,9 +166,9 @@ class AnnotationEditor(QTextEdit):
             return
         cursor = QTextCursor(self.document())
         cursor.select(QTextCursor.Document)
-        block_fmt = cursor.blockFormat()
+        block_fmt = QTextBlockFormat()
         block_fmt.setLineHeight(int(factor * 100), 1)  # ProportionalHeight
-        cursor.setBlockFormat(block_fmt)
+        cursor.mergeBlockFormat(block_fmt)
 
     def set_context_menu_builder(self, fn):
         """`fn(menu, ann_id_or_None, sel_start, sel_end)` populates the menu."""

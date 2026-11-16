@@ -137,7 +137,8 @@ class HistoryTests(unittest.TestCase):
         self.window.load_file(str(FIXTURES / "test_example.docx"))
         self.window.act_auto_match.setChecked(True)
         before = contents(self.window.doc)
-        self.select_span(55, 59)
+        start = self.window.doc.text.index("意定之債")
+        self.select_span(start, start + 4)
         with patch("lexiarbiter.app.ConceptSelectionDialog") as dialog:
             dialog.return_value.exec.return_value = True
             dialog.return_value.selected_entity_type.return_value = "term"

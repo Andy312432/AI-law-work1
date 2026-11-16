@@ -2,7 +2,7 @@
 
 Files in the working folder are split across three tabs by extension:
 
-* ``原始檔 .json`` — judicial open-data input.
+* ``原始檔`` — JSON, DOCX, Markdown, and HTML input.
 * ``標註檔 .lexa`` — annotation progress files.
 * ``模型檔 .txt`` — model-ready exports.
 
@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 
-_EXTS = (".json", ".lexa", ".txt")
+_RAW_EXTS = (".json", ".docx", ".md", ".markdown", ".html", ".htm")
 _TAB_ORDER: tuple[str, ...] = ("raw", ".lexa", ".txt")
 _TAB_LABELS: dict[str, str] = {
     "raw": "原始檔",
@@ -156,9 +156,9 @@ class FilePanel(QWidget):
             if ext == ".lexa" and ".autosave." in entry.name:
                 continue
 
-            # 將 .json 與 .docx 都分派給 "raw" tab
+            # 可匯入的來源檔都分派給原始檔分頁。
             tab_key = None
-            if ext in (".json", ".docx"):
+            if ext in _RAW_EXTS:
                 tab_key = "raw"
             elif ext == ".lexa":
                 tab_key = ".lexa"
@@ -260,7 +260,7 @@ class FilePanel(QWidget):
 
     def _switch_to_tab_for(self, path: Path) -> None:
         ext = path.suffix.lower()
-        if ext in (".json", ".docx"):
+        if ext in _RAW_EXTS:
             tab_key = "raw"
         elif ext == ".lexa":
             tab_key = ".lexa"

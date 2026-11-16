@@ -8,7 +8,7 @@ PDF 前面的環境設定與 GUI 教學是背景說明；作業的驗收目標�
 
 | 功能 | 程式行為 |
 | --- | --- |
-| 開啟資料 | 支援原有 `.docx`、判決 `.json`、`.lexa` 與模型 `.txt`；保留原文作為標註座標基準。 |
+| 開啟資料 | 支援 `.docx`、判決 `.json`、`.lexa`、模型 `.txt`，以及 `.md`／`.markdown`、`.html`／`.htm`；格式文件以顯示文字作為標註座標基準。 |
 | 標註術語 | 選取文字後按「專業術語」或 `1`。每一筆都有獨立範圍與 ID。 |
 | 概念與上位概念 | 「目前概念」區塊同時顯示既有概念清單與名稱欄位：單擊清單即選取並同步名稱，也可直接輸入新名稱。兩者設定同一個值，名稱相同會重用概念 ID。「上位概念」在另一區塊設定。 |
 | 實體類型顯示與修改 | 主畫面右下角顯示目前標註的實體類型；按「修改標註」可切換類型。樹狀圖同步顯示類型名稱，變更支援復原、重做及 `.lexa` 存檔。 |
@@ -50,7 +50,22 @@ python -m venv .venv
 
 要修改實體類型，先選定一筆標註，按右下角「修改標註」，在「實體類型」選擇其他項目後確定。只會更新這一筆的類型，概念、上位概念及解釋範圍會保留；其他同概念的標註不變。`Ctrl+Z` 可復原類型變更。
 
-所有範圍都採原文的 Python 字元座標 `[start, end)`：包含起點、不包含終點。編輯器會處理 CRLF、隱藏的 `<br>` 與 emoji 的 UTF-16 座標轉換。
+所有範圍都採標註文字的 Python 字元座標 `[start, end)`：包含起點、不包含終點。編輯器會處理 CRLF 與 emoji 的 UTF-16 座標轉換。
+
+## Markdown、HTML 與 DOCX 顯示
+
+按「開啟檔案」即可開啟 Markdown 或 HTML；「資料夾檔案」的「原始檔」分頁也會列出這些格式。
+
+- `.md`／`.markdown` 使用 Qt 的 `setMarkdown()`，可顯示標題、粗體、斜體、清單、程式碼及表格。
+- `.html`／`.htm` 使用 Qt 的 `setHtml()`。判決 JSON 的 `JFULL` 含 HTML 標籤時，也會使用 HTML 顯示；沒有 HTML 的 JSON 維持原始文字與換行。
+- DOCX 改由 Mammoth 轉成 HTML，再交給 Qt 顯示。標題、粗斜體與表格使用格式呈現，不再插入自訂的標題符號或「我是表格 start/end」。
+- `<br>` 隱藏邏輯已移除。HTML 內容的 `<br>`／`<br />` 由 Qt 產生真正換行；純文字內容的標籤保留原樣。
+
+HTML 支援範圍以 Qt 的富文字子集為準，沒有瀏覽器的 JavaScript 或完整 CSS。Mammoth 著重文件的語意格式，不會逐頁重現 Word 的版面。此環境的 Qt Markdown 內嵌 HTML 換行請使用 `<br />`；`<br>` 形式可能造成後文被 Qt 略過，完整 HTML 文件可直接用 `.html` 開啟。
+
+新匯入的格式文件會把 **Qt 顯示文字**存入 `text`，原始 Markdown／HTML 保存在既有的 `source.meta._lexiarbiter_rich_text` 中；`Annotation`、`Document` 與 `.lexa` 的原有欄位結構不變。標註、自動比對、解釋與匯出都以同一份顯示文字計算範圍。儲存 `.lexa` 後重開會保留格式，不必重新轉換 DOCX。
+
+舊 `.lexa` 沒有格式來源時，沿用已存的文字與座標，不會自動解析 Markdown／HTML。新版 DOCX 匯入的段落與空白可能和舊版不同，因此不能直接套用舊版匯入的數字座標。若格式來源和已存的標註文字不一致，程式會退回顯示已存文字，保住原有標註位置。
 
 ## 互動概念關係樹
 
@@ -121,7 +136,8 @@ python -m venv .venv
 
 測試涵蓋：
 
-- DOCX 原文與參考 `.lexa` 的 1,209 字完全一致。
+- Mammoth 匯入 DOCX 後，逐筆核對參考 `.lexa` 的 11 個術語及解釋文字；座標依新版顯示文字計算。
+- Markdown／HTML 原生格式、DOCX 標題與粗體、真正的表格、HTML 換行、Unicode 選取、格式與標註存檔重讀，以及舊檔座標相容。
 - 依任務單完成 11 筆標註，經 GUI 儲存並重讀，比對術語範圍、解釋範圍及概念名稱。
 - 真實 Qt 對話框、快捷鍵 `1`、解釋按鈕、術語點擊與概念點擊。
 - 概念階層、11 筆術語位置、多個上位概念、循環與缺漏資料的顯示、搜尋、選取同步、放大視窗，以及從樹上雙擊修改關係後儲存並重讀。
@@ -141,5 +157,6 @@ python -m venv .venv
 - `lexiarbiter/widgets/editor.py`：原文座標映射、點擊訊號、提示及高亮。
 - `lexiarbiter/widgets/concept_panel.py`：概念對話框與標註詳情。
 - `lexiarbiter/widgets/concept_tree.py`：互動概念關係樹、搜尋、原文連動與放大視窗。
-- `lexiarbiter/core/io.py`：沿用 DOCX 解析、LEXA 讀寫與模型匯出。
+- `lexiarbiter/core/io.py`：Mammoth DOCX 轉換、格式文件匯入、LEXA 讀寫與模型匯出。
+- `lexiarbiter/core/rich_text.py`：Qt 原生格式載入、標註文字與格式來源保存，以及舊檔顯示相容。
 - `lexiarbiter/history.py`：術語與概念的操作快照、復原與重做命令。

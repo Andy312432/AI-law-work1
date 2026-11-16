@@ -141,10 +141,10 @@ class AnnotationDetails(QWidget):
         title = QLabel("術語與解釋")
         title.setStyleSheet("font-weight: bold;")
         layout.addWidget(title)
-        self.annotations = QComboBox()
-        self.annotations.setPlaceholderText("選擇術語")
-        self.annotations.activated.connect(self._on_activated)
-        layout.addWidget(self.annotations)
+        #self.annotations = QComboBox()
+        #self.annotations.setPlaceholderText("選擇術語")
+        #self.annotations.activated.connect(self._on_activated)
+        #layout.addWidget(self.annotations)
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
         self.summary.setMaximumHeight(155)
@@ -163,15 +163,15 @@ class AnnotationDetails(QWidget):
         self.refresh(None)
 
     def refresh(self, doc, annotation_id=None, mode=None):
-        self.annotations.blockSignals(True)
-        self.annotations.clear()
-        if doc:
-            for ann in doc.sorted_annotations():
-                term = doc.text[ann.start:ann.end].replace("\n", " ")
-                self.annotations.addItem(f"{ann.start}-{ann.end}　{term[:40]}", ann.id)
-        index = self.annotations.findData(annotation_id)
-        self.annotations.setCurrentIndex(index)
-        self.annotations.blockSignals(False)
+        #self.annotations.blockSignals(True)
+        #self.annotations.clear()
+        #if doc:
+        #    for ann in doc.sorted_annotations():
+        #        term = doc.text[ann.start:ann.end].replace("\n", " ")
+        #        self.annotations.addItem(f"{ann.start}-{ann.end}　{term[:40]}", ann.id)
+        #index = self.annotations.findData(annotation_id)
+        #self.annotations.setCurrentIndex(index)
+        #self.annotations.blockSignals(False)
         ann = doc.find_annotation(annotation_id) if doc else None
         for button in (self.set_explanation_button, self.use_self_button, self.edit_concepts_button):
             button.setEnabled(ann is not None)

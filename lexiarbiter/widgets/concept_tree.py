@@ -102,7 +102,7 @@ class ConceptSidebar(QWidget):
         layout.addLayout(row)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["上位概念 → 概念 → 術語位置", "類型／筆數"])
+        self.tree.setHeaderLabels(["術語位置", "類型／筆數"])
         self.tree.setColumnWidth(0, 285)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
