@@ -85,6 +85,35 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.doc.annotations, [])
         self.assertEqual(self.window.doc.concepts, {})
 
+    def test_ctrl_f_searches_document_and_escape_closes_search_bar(self):
+        self.window.show()
+        self.window.editor.setFocus()
+        APP.processEvents()
+        QTest.keyClick(self.window.editor, Qt.Key_F, Qt.ControlModifier)
+        self.assertTrue(self.window.find_bar.isVisible())
+        self.assertTrue(self.window.find_bar.search_edit.hasFocus())
+        self.window.find_bar.search_edit.setText("無因管理")
+        self.assertEqual(self.window.editor.textCursor().selectedText(), "無因管理")
+        self.assertTrue(self.window.find_bar.result_label.text().endswith(
+            f"/ {self.window.doc.text.count('無因管理')}"))
+        self.assertFalse(self.window.undo_stack.canUndo())
+        QTest.keyClick(self.window.find_bar.search_edit, Qt.Key_Escape)
+        self.assertTrue(self.window.find_bar.isHidden())
+        self.assertTrue(self.window.editor.hasFocus())
+
+    def test_search_results_refresh_after_loading_another_document(self):
+        self.window.show()
+        self.window.act_find.trigger()
+        self.window.find_bar.search_edit.setText("表格文字解析")
+        path = Path(self.folder.name) / "search.md"
+        path.write_text("# 標題😀\n\n**表格文字解析**", encoding="utf-8")
+        self.window.doc.dirty = False
+        self.window.load_file(str(path))
+        self.assertEqual(self.window.find_bar.result_label.text(), "1 / 1")
+        self.assertEqual(self.window.editor.textCursor().selectedText(), "表格文字解析")
+        start = self.window.doc.text.index("表格文字解析")
+        self.assertEqual(self.window.editor.storage_selection(), (start, start + 6))
+
     def test_default_automatic_action_records_all_occurrences(self):
         self.window.act_auto_match.setChecked(True)
         start = self.window.doc.text.index("意定之債")

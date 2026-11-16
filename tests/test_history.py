@@ -228,7 +228,8 @@ class HistoryTests(unittest.TestCase):
             dialog.return_value.concept_name.return_value = self.window.doc.concepts[first.concept_id]
             dialog.return_value.broader_name.return_value = self.window.doc.concepts[first.broader_concept_id]
             self.window.apply_label("entity", "term")
-        self.assertEqual(self.window.annotation_details.annotations.currentData(), first.id)
+        self.assertEqual(self.window.active_annotation_id, first.id)
+        self.assertEqual(self.window.concept_panel.tree.currentItem().data(0, Qt.UserRole)["id"], first.id)
         self.assertFalse(self.window.undo_stack.canUndo())
         self.assertFalse(self.window.doc.dirty)
 

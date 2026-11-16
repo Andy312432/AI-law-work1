@@ -35,6 +35,7 @@ from .core.annotations import (
 )
 from .history import EditCommand, EditSnapshot
 from .widgets.editor import AnnotationEditor
+from .widgets.find_bar import FindBar
 from .widgets.file_panel import FilePanel
 from .widgets.concept_panel import AnnotationDetails, ConceptSelectionDialog, ConceptSidebar
 
@@ -139,8 +140,16 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(self.annotation_details)
         right_splitter.setSizes([470, 330])
 
+        editor_panel = QWidget()
+        editor_layout = QVBoxLayout(editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(0)
+        self.find_bar = FindBar(self.editor)
+        editor_layout.addWidget(self.find_bar)
+        editor_layout.addWidget(self.editor, 1)
+
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.editor)
+        splitter.addWidget(editor_panel)
         splitter.addWidget(right_splitter)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
@@ -245,6 +254,11 @@ class MainWindow(QMainWindow):
         self.act_copy.setShortcut("Ctrl+C")
         self.act_copy.triggered.connect(self.editor.copy)
         m_edit.addAction(self.act_copy)
+
+        self.act_find = QAction("搜尋原文…", self)
+        self.act_find.setShortcut(self.prefs.app_shortcut("find", "Ctrl+F"))
+        self.act_find.triggered.connect(self.find_bar.open_search)
+        m_edit.addAction(self.act_find)
 
         m_edit.addSeparator()
         self.act_next_file = QAction("下一個檔案", self)
@@ -893,6 +907,7 @@ class MainWindow(QMainWindow):
             self.undo_stack.resetClean()
         self.active_annotation_id = None
         self.editor.attach(doc, self.mode, self.prefs)
+        self.find_bar.refresh()
         self.concept_panel.refresh(doc, self.mode)
         if self.mode.id == "term_definition":
             self.right_tabs.setCurrentWidget(self.concept_panel)
@@ -1117,6 +1132,7 @@ class MainWindow(QMainWindow):
         self._populate_label_buttons()
         if self.doc is not None:
             self.editor.attach(self.doc, self.mode, self.prefs)
+            self.find_bar.refresh()
             self.concept_panel.refresh(self.doc, self.mode)
             self._select_annotation(self.active_annotation_id)
         self._refresh_status()
@@ -1437,7 +1453,7 @@ class MainWindow(QMainWindow):
 
     def _update_actions(self):
         has_doc = self.doc is not None
-        for a in (self.act_save, self.act_save_as, self.act_export, self.act_remove_ann):
+        for a in (self.act_save, self.act_save_as, self.act_export, self.act_remove_ann, self.act_find):
             a.setEnabled(has_doc)
         has_target = has_doc and self.active_annotation_id is not None and self.mode.id == "term_definition"
         self.act_set_explanation.setEnabled(has_target)
