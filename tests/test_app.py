@@ -153,6 +153,48 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.doc.annotations[0].explanation_end, explanation_end)
         self.assertIn("債之發生原因", self.window.annotation_details.summary.toPlainText())
 
+    def test_auto_explanation_is_one_undoable_edit_and_survives_save_reload(self):
+        self.window.load_file(str(FIXTURES / "test_example.lexa"))
+        self.window.act_auto_match.setChecked(True)
+        doc = self.window.doc
+        before = [ann.to_dict() for ann in doc.annotations]
+        matching = [ann.id for ann in doc.annotations if doc.text[ann.start:ann.end] == "無因管理"]
+        self.assertEqual(len(matching), 2)
+        self.window._select_annotation(matching[0])
+        self.select_span(55, 59)
+        self.window.action_set_explanation()
+        after = [ann.to_dict() for ann in doc.annotations]
+        for original, ann in zip(before, doc.annotations):
+            if ann.id in matching:
+                self.assertEqual((ann.explanation_start, ann.explanation_end), (55, 59))
+            else:
+                self.assertEqual(ann.to_dict(), original)
+        self.assertIn("共更新 2 筆", self.window.status.currentMessage())
+        self.assertEqual(self.window.undo_stack.count(), 1)
+        self.window.undo_stack.undo()
+        self.assertEqual([ann.to_dict() for ann in doc.annotations], before)
+        self.assertFalse(self.window.undo_stack.canUndo())
+        self.window.undo_stack.redo()
+        self.assertEqual([ann.to_dict() for ann in doc.annotations], after)
+        path = Path(self.folder.name) / "shared-explanation.lexa"
+        with patch("lexiarbiter.app.QFileDialog.getSaveFileName", return_value=(str(path), "")):
+            self.assertTrue(self.window.action_save_as())
+        self.window.load_file(str(path))
+        self.assertEqual([ann.to_dict() for ann in self.window.doc.annotations], after)
+
+    def test_explanation_with_automatic_annotation_disabled_only_changes_target(self):
+        self.window.load_file(str(FIXTURES / "test_example.lexa"))
+        self.window.act_auto_match.setChecked(False)
+        doc = self.window.doc
+        matching = [ann for ann in doc.annotations if doc.text[ann.start:ann.end] == "無因管理"]
+        other = matching[1].to_dict()
+        self.window._select_annotation(matching[0].id)
+        self.select_span(55, 59)
+        self.window.action_set_explanation()
+        current = doc.find_annotation(matching[0].id)
+        self.assertEqual((current.explanation_start, current.explanation_end), (55, 59))
+        self.assertEqual(doc.find_annotation(other["id"]).to_dict(), other)
+
     def test_tree_edit_changes_parent_refreshes_branch_and_survives_save(self):
         self.window.load_file(str(FIXTURES / "test_example.lexa"))
         ann = self.window.doc.annotations[1]

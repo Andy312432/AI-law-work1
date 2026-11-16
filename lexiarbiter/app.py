@@ -357,6 +357,7 @@ class MainWindow(QMainWindow):
         self.act_edit_concepts.triggered.connect(self.action_edit_concepts)
         self.act_auto_match = QAction("自動標註相同術語", self)
         self.act_auto_match.setCheckable(True)
+        self.act_auto_match.setToolTip("自動標註相同術語；設定解釋時，同步相同概念、上位概念與術語文字的標註。")
         self.act_auto_match.setChecked(self.prefs.behavior.get("auto_annotate_matches", True))
         self.act_auto_match.toggled.connect(self._toggle_auto_match)
         tb.addAction(self.act_auto_match)
@@ -551,7 +552,8 @@ class MainWindow(QMainWindow):
             "5. 右側可修改概念、改回術語本身，或選擇其他標註。\n"
             "6. Ctrl+S 儲存完整 .lexa；每 60 秒另有自動備份。\n\n"
             "自動標註相同術語：新位置共用概念與上位概念，解釋用各自術語本身。"
-            "既有標註不會被自動覆寫；有重疊會略過並顯示數量。\n"
+            "新增時保留既有標註；有重疊會略過並顯示數量。\n"
+            "開啟自動標註時，設定解釋會同步更新概念、上位概念與術語文字都相同的標註。\n"
             "要重現提供的 11 筆任務單，請先關閉「自動標註相同術語」。\n"
             "右側「概念關係樹」呈現上位概念、概念與術語位置，可搜尋、展開及收合。\n"
             "點概念可循環跳到相關術語；點術語位置跳回原文，雙擊可修改概念與上位概念。\n"
@@ -698,12 +700,15 @@ class MainWindow(QMainWindow):
         s, e = self.editor.storage_selection()
         before = EditSnapshot.capture(self.doc, self.active_annotation_id)
         try:
-            set_explanation(self.doc, self.active_annotation_id, TextSpan(s, e))
+            updated = set_explanation(
+                self.doc, self.active_annotation_id, TextSpan(s, e),
+                auto_match=self.act_auto_match.isChecked(),
+            )
         except ValueError as error:
             self.status.showMessage(str(error), 5000)
             return
         self._commit_edit("設定解釋", before)
-        self.status.showMessage(f"已設定解釋範圍 [{s}, {e})，共 {e - s} 字。", 5000)
+        self.status.showMessage(f"已設定解釋範圍 [{s}, {e})，共 {e - s} 字；共更新 {updated} 筆標註。", 5000)
 
     def action_use_term_explanation(self):
         ann = self.doc.find_annotation(self.active_annotation_id) if self.doc else None

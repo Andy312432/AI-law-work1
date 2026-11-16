@@ -123,13 +123,24 @@ def _add_matches(doc: Document, source: Annotation, group_id: str) -> tuple[int,
     return created, skipped
 
 
-def set_explanation(doc: Document, annotation_id: str, span: TextSpan) -> None:
+def set_explanation(doc: Document, annotation_id: str, span: TextSpan, *,
+                    auto_match: bool = False) -> int:
+    """Assign a range to matching terms in one concept branch; return the target count."""
     span.validate(doc.text)
     ann = doc.find_annotation(annotation_id)
     if ann is None:
         raise ValueError("請先點選要設定解釋的術語。")
-    ann.explanation_start, ann.explanation_end = span.start, span.end
+    targets = [ann]
+    if auto_match:
+        term = doc.text[ann.start:ann.end]
+        targets = [candidate for candidate in doc.annotations
+                   if candidate.concept_id == ann.concept_id
+                   and candidate.broader_concept_id == ann.broader_concept_id
+                   and doc.text[candidate.start:candidate.end] == term]
+    for target in targets:
+        target.explanation_start, target.explanation_end = span.start, span.end
     doc.dirty = True
+    return len(targets)
 
 
 def validate_term_annotations(doc: Document) -> None:

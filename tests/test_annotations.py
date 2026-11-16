@@ -81,6 +81,49 @@ class AnnotationTests(unittest.TestCase):
         record_term(doc, TextSpan(12, 18), "損害賠償責任", replace_conflicts=True)
         self.assertEqual(doc.sorted_annotations()[-1].end, 18)
 
+    def test_auto_explanation_matches_concept_parent_and_exact_term_text(self):
+        doc = Document("術語 術語 術語 術語 別稱 解釋", concepts={
+            "c": "概念", "d": "概念", "p": "上位甲", "q": "上位乙",
+        }, annotations=[
+            Annotation(0, 2, {"entity": "term"}, concept_id="c", broader_concept_id="p"),
+            Annotation(3, 5, {"entity": "reason"}, concept_id="c", broader_concept_id="p"),
+            Annotation(6, 8, {"entity": "term"}, concept_id="c", broader_concept_id="q"),
+            Annotation(9, 11, {"entity": "term"}, concept_id="d", broader_concept_id="p"),
+            Annotation(12, 14, {"entity": "term"}, concept_id="c", broader_concept_id="p"),
+        ])
+        for ann in doc.annotations:
+            ann.explanation_start, ann.explanation_end = ann.start, ann.end
+        before = [ann.to_dict() for ann in doc.annotations]
+        updated = set_explanation(doc, doc.annotations[0].id, TextSpan(15, 17), auto_match=True)
+        self.assertEqual(updated, 2)
+        for ann in doc.annotations[:2]:
+            self.assertEqual((ann.explanation_start, ann.explanation_end), (15, 17))
+        self.assertEqual([ann.to_dict() for ann in doc.annotations[2:]], before[2:])
+        self.assertEqual(doc.annotations[1].labels, {"entity": "reason"})
+        self.assertTrue(doc.dirty)
+
+    def test_explanation_without_auto_match_only_updates_selected_annotation(self):
+        doc = Document("術語、術語；解釋")
+        result = record_term(doc, TextSpan(0, 2), "概念", "上位")
+        other = doc.annotations[1].to_dict()
+        updated = set_explanation(doc, result.annotation.id, TextSpan(6, 8))
+        self.assertEqual(updated, 1)
+        self.assertEqual((result.annotation.explanation_start, result.annotation.explanation_end), (6, 8))
+        self.assertEqual(doc.annotations[1].to_dict(), other)
+
+    def test_invalid_auto_explanation_leaves_all_annotations_unchanged(self):
+        doc = Document("術語、術語")
+        result = record_term(doc, TextSpan(0, 2), "概念", "上位")
+        doc.dirty = False
+        before = [ann.to_dict() for ann in doc.annotations]
+        for annotation_id, span in ((result.annotation.id, TextSpan(0, 0)),
+                                    ("missing", TextSpan(0, 2))):
+            with self.subTest(annotation_id=annotation_id, span=span):
+                with self.assertRaises(ValueError):
+                    set_explanation(doc, annotation_id, span, auto_match=True)
+                self.assertEqual([ann.to_dict() for ann in doc.annotations], before)
+                self.assertFalse(doc.dirty)
+
     def test_overlapping_literal_matches_choose_first_available_range(self):
         doc = Document("aaaaa")
         record_term(doc, TextSpan(1, 3), "aa")
