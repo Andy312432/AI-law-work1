@@ -101,13 +101,6 @@ class ConceptSidebar(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
-        self.hierarchy_label = QLabel("繼承層級：尚未選取實體")
-        self.hierarchy_label.setTextFormat(Qt.PlainText)
-        self.hierarchy_label.setWordWrap(True)
-        self.hierarchy_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.hierarchy_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        layout.addWidget(self.hierarchy_label)
-
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["術語位置", "類型／筆數"])
         self.tree.setColumnWidth(0, 285)
@@ -131,9 +124,12 @@ class ConceptSidebar(QWidget):
         self._edit_shortcut = QShortcut(QKeySequence("F2"), self.tree)
         self._edit_shortcut.activated.connect(lambda: self._edit_item(self.tree.currentItem()))
 
-        self.empty_label = QLabel("尚無概念")
-        self.empty_label.setWordWrap(True)
-        layout.addWidget(self.empty_label)
+        self.hierarchy_label = QLabel("(尚未選取實體)")
+        self.hierarchy_label.setTextFormat(Qt.PlainText)
+        self.hierarchy_label.setWordWrap(True)
+        self.hierarchy_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.hierarchy_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout.addWidget(self.hierarchy_label)
         self.refresh(None)
 
     def _expanded_paths(self):
@@ -183,7 +179,6 @@ class ConceptSidebar(QWidget):
             self.select_annotation(selected["id"])
         count = len(doc.annotations) if doc else 0
         self.summary.setText(f"概念關係樹　{len(graph.names)} 個概念 · {count} 筆標註")
-        self.empty_label.setVisible(not graph.names and not graph.unassigned)
         if self._viewer_panel is not None:
             self._viewer_panel.refresh(doc, self._mode)
 
@@ -257,7 +252,7 @@ class ConceptSidebar(QWidget):
         while item is not None:
             path.append(item.text(0))
             item = item.parent()
-        text = "繼承層級：" + (" → ".join(reversed(path)) if path else "尚未選取實體")
+        text = (" → ".join(reversed(path)) if path else "(尚未選取實體)")
         self.hierarchy_label.setText(text)
         self.hierarchy_label.setToolTip(text)
 
