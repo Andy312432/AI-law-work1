@@ -22,7 +22,7 @@ def main():
     # 最優先初始化 logging，確保後續任何錯誤都能被記錄
     setup_logging()
     log_environment(__version__)
-    log = logging.getLogger(__name__)
+    log = logging.getLogger("lexiarbiter.main")
 
     app = QApplication(sys.argv)
     app.setApplicationName("LexiArbiter")
@@ -55,6 +55,7 @@ def main():
     # 安裝 crash hook，未捕獲例外時先緊急存檔再寫 log
     install_exception_hook(win.emergency_save)
     win.show()
+    log.info("Main window ready: mode=%s", win.mode.id)
 
     try:
         sys.exit(app.exec())

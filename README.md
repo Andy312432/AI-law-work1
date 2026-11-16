@@ -38,6 +38,26 @@ python -m venv .venv
 
 「設定標註」視窗中，目前概念表示文字所指的概念，例如「無因管理」；上位概念表示它所屬的較大類別，例如「法定之債」。該視窗保留這兩句簡短說明，其他畫面的操作提示維持精簡。視窗上方的「實體類型」可選擇「專業術語」「原因」或模式內的自訂類型。
 
+## Windows 執行檔打包
+
+安裝 `requirements.txt` 後，在 PowerShell 執行 `./build.bat`，或直接執行：
+
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean main.spec
+```
+
+輸出為 `dist/LexiArbiter/LexiArbiter.exe`。發佈時請複製整個 `dist/LexiArbiter` 資料夾；`configs`（可編輯的標註模式與偏好設定）、`assets`、Python 與 Qt 執行依賴都已自動包含。設定檔位於執行檔旁，從其他工作目錄啟動也能找到。這是資料夾式打包，不能只複製 `.exe`。
+
+打包設定會優先從 Windows 系統目錄解析系統 DLL，避免 `PATH` 中其他工具的同名 ICU DLL 被誤收，造成 `QtGui` 載入失敗。重建會取代 `dist/LexiArbiter` 的內容，若已在該資料夾修改設定，請先保留需要的設定檔。
+
+實際打包後，可執行以下檢查，驗證資源完整且搬到含中文名稱的目錄後仍可啟動：
+
+```powershell
+$env:LEXIARBITER_BUNDLE_DIR = (Resolve-Path .\dist\LexiArbiter).Path
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_bundle.py
+Remove-Item Env:\LEXIARBITER_BUNDLE_DIR
+```
+
 ## 一筆標註怎麼做
 
 1. 開啟 `test_example.docx`。
