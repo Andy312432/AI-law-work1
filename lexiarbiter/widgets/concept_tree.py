@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
-    QPushButton, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..core.models import Annotation, Document
@@ -101,6 +101,13 @@ class ConceptSidebar(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
+        self.hierarchy_label = QLabel("繼承層級：尚未選取實體")
+        self.hierarchy_label.setTextFormat(Qt.PlainText)
+        self.hierarchy_label.setWordWrap(True)
+        self.hierarchy_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.hierarchy_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout.addWidget(self.hierarchy_label)
+
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["術語位置", "類型／筆數"])
         self.tree.setColumnWidth(0, 285)
@@ -111,6 +118,7 @@ class ConceptSidebar(QWidget):
         self.tree.setAnimated(True)
         self.tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tree.setExpandsOnDoubleClick(True)
+        self.tree.itemSelectionChanged.connect(self._update_hierarchy_label)
         self.tree.itemClicked.connect(self._activate_item)
         self.tree.itemDoubleClicked.connect(self._edit_item)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -242,7 +250,20 @@ class ConceptSidebar(QWidget):
             item.setExpanded(True)
         return visible
 
+    def _update_hierarchy_label(self):
+        selected = self.tree.selectedItems()
+        item = selected[0] if selected else None
+        path = []
+        while item is not None:
+            path.append(item.text(0))
+            item = item.parent()
+        text = "繼承層級：" + (" → ".join(reversed(path)) if path else "尚未選取實體")
+        self.hierarchy_label.setText(text)
+        self.hierarchy_label.setToolTip(text)
+
     def select_annotation(self, annotation_id):
+        if self._viewer_panel is not None:
+            self._viewer_panel.select_annotation(annotation_id)
         candidates = self._annotation_items.get(annotation_id, ())
         if not candidates:
             self.tree.clearSelection()
@@ -257,8 +278,6 @@ class ConceptSidebar(QWidget):
             ancestor = ancestor.parent()
         self.tree.setCurrentItem(item)
         self.tree.scrollToItem(item)
-        if self._viewer_panel is not None:
-            self._viewer_panel.select_annotation(annotation_id)
 
     def _open_viewer(self):
         if self._viewer_dialog is None:
@@ -275,6 +294,11 @@ class ConceptSidebar(QWidget):
             layout.addWidget(self._viewer_panel)
             self.viewer_created.emit(self._viewer_dialog)
         self._viewer_panel.refresh(self._doc, self._mode)
+        current = self.tree.currentItem()
+        if current is not None and current.isSelected():
+            entry = current.data(0, Qt.UserRole)
+            if entry["kind"] == "annotation":
+                self._viewer_panel.select_annotation(entry["id"])
         self._viewer_dialog.show()
         self._viewer_dialog.raise_()
         self._viewer_dialog.activateWindow()

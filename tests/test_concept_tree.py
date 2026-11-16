@@ -70,8 +70,63 @@ class ConceptTreeTests(unittest.TestCase):
         QTest.mouseClick(self.panel.tree.viewport(), Qt.LeftButton,
                          pos=self.panel.tree.visualItemRect(item).center())
         self.assertEqual(navigation.at(0)[0], item.data(0, Qt.UserRole)["id"])
+        self.assertEqual(self.panel.hierarchy_label.text(),
+                         "繼承層級：債之發生原因 → 意定之債 → 「意定之債」 [55, 59)")
         self.panel.tree.itemDoubleClicked.emit(item, 0)
         self.assertEqual(editing.at(0)[0], item.data(0, Qt.UserRole)["id"])
+
+    def test_hierarchy_label_tracks_programmatic_and_keyboard_selection(self):
+        target = next(ann for ann in self.doc.annotations if ann.start == 105)
+        self.panel.select_annotation(target.id)
+        self.assertEqual(self.panel.hierarchy_label.text(),
+                         "繼承層級：債之發生原因 → 法定之債 → 無因管理 → 「無因管理」 [105, 109)")
+        self.panel.show()
+        APP.processEvents()
+        QTest.keyClick(self.panel.tree, Qt.Key_Down)
+        self.assertEqual(self.panel.hierarchy_label.text(),
+                         "繼承層級：債之發生原因 → 法定之債 → 無因管理 → 「無因管理」 [121, 125)")
+
+    def test_hierarchy_label_resets_when_selection_or_document_is_cleared(self):
+        self.assertEqual(self.panel.hierarchy_label.text(), "繼承層級：尚未選取實體")
+        for clear in (self.panel.tree.clearSelection,
+                      lambda: self.panel.select_annotation("missing"),
+                      lambda: self.panel.refresh(None)):
+            with self.subTest(clear=clear):
+                self.panel.select_annotation(self.doc.annotations[0].id)
+                clear()
+                self.assertEqual(self.panel.hierarchy_label.text(), "繼承層級：尚未選取實體")
+
+    def test_hierarchy_label_uses_selected_branch_for_a_shared_concept(self):
+        doc = Document("甲乙", concepts={"a": "上位甲", "b": "上位乙", "c": "共用概念"},
+                       annotations=[Annotation(0, 1, concept_id="c", broader_concept_id="a"),
+                                    Annotation(1, 2, concept_id="c", broader_concept_id="b")])
+        self.panel.refresh(doc)
+        self.panel.select_annotation(doc.annotations[1].id)
+        self.assertEqual(self.panel.hierarchy_label.text(),
+                         "繼承層級：上位乙 → 共用概念 → 「乙」 [1, 2)")
+        doc.concepts["c"] = "<修改後概念>"
+        doc.annotations[1].broader_concept_id = "a"
+        self.panel.refresh(doc)
+        self.assertEqual(self.panel.hierarchy_label.text(),
+                         "繼承層級：上位甲 → <修改後概念> → 「乙」 [1, 2)")
+        self.assertEqual(self.panel.hierarchy_label.textFormat(), Qt.PlainText)
+
+    def test_unassigned_annotation_shows_missing_concept_in_hierarchy_label(self):
+        ann = Annotation(0, 1)
+        self.panel.refresh(Document("甲", annotations=[ann]))
+        self.panel.select_annotation(ann.id)
+        self.assertEqual(self.panel.hierarchy_label.text(),
+                         "繼承層級：尚未設定概念 → 「甲」 [0, 1)")
+
+    def test_enlarged_view_starts_with_selected_hierarchy_and_clears_in_sync(self):
+        self.panel.select_annotation(self.doc.annotations[-1].id)
+        self.panel.zoom_button.click()
+        viewer = self.panel._viewer_panel
+        self.assertEqual(viewer.hierarchy_label.text(), self.panel.hierarchy_label.text())
+        self.panel.select_annotation(None)
+        self.assertEqual(viewer.tree.selectedItems(), [])
+        self.assertEqual(viewer.hierarchy_label.text(), "繼承層級：尚未選取實體")
+        self.panel._viewer_dialog.close()
 
     def test_search_preserves_ancestors_and_restores_collapsed_branches(self):
         root = self.panel.tree.topLevelItem(0)
